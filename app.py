@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pickle
+import requests
+import json
 import time
-import random
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -81,10 +81,9 @@ st.markdown("""
     }
     
     /* Input Fields */
-    .stNumberInput input {
-        background-color: rgba(255, 255, 255, 0.05);
-        color: white;
-        border: 1px solid rgba(255, 255, 255, 0.1);
+    .stNumberInput input, .stSelectbox, .stTextInput, .stSlider {
+        background-color: rgba(255, 255, 255, 0.05) !important;
+        color: white !important;
         border-radius: 5px;
     }
     
@@ -114,51 +113,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- MODEL LOADING LOGIC ---
-@st.cache_resource
-def load_model():
-    try:
-        with open('model.pkl', 'rb') as f:
-            model = pickle.load(f)
-        return model, True
-    except FileNotFoundError:
-        # Dummy Model fallback class
-        class DummyModel:
-            def predict(self, X):
-                # Simple logic for demo: High Recency + Low Freq = Churn
-                return [1 if (x[0] > 60 and x[1] < 5) else 0 for x in X.values]
-            
-            def predict_proba(self, X):
-                # Generate a probability geared towards the prediction
-                probs = []
-                for x in X.values:
-                    risk = random.random()
-                    if x[0] > 60: risk += 0.3
-                    if x[1] < 5: risk += 0.2
-                    if x[4] < 3: risk += 0.2 # Low rating
-                    
-                    risk = min(max(risk, 0.1), 0.95) # Clamp
-                    probs.append([1-risk, risk])
-                return np.array(probs)
-                
-        return DummyModel(), False
-
-model, model_loaded = load_model()
-
-# --- SIDEBAR INPUTS (Global for Tab 2, but placed here for structure) ---
-with st.sidebar:
-    st.markdown("### ⚙️ Configuración del Cliente")
-    st.markdown("---")
-    recency = st.number_input("📅 Recency Days (Días sin compra)", min_value=0, max_value=3650, value=30)
-    frequency = st.number_input("📦 Purchase Frequency (Total Órdenes)", min_value=1, max_value=1000, value=5)
-    monetary = st.number_input("💰 Total Spent ($ USD)", min_value=0.0, value=500.0)
-    engagement = st.slider("🖱️ Avg Engagement Score", 0.0, 100.0, 50.0)
-    rating = st.slider("⭐ Customer Rating", 1, 5, 4)
-    age = st.slider("👤 Age", 18, 100, 35)
-    
-    st.markdown("---")
-    st.caption(f"Status del Modelo: {'🟢 Cargado' if model_loaded else '🟡 Demo (Dummy)'}")
-    st.caption("v1.0.0 - E-comChurnnalisys")
+# --- BACKEND API URL ---
+BACKEND_URL = "http://localhost:8000"
 
 # --- MAIN CONTENT ---
 st.markdown('<h1 class="title-text">E-comChurnnalisys</h1>', unsafe_allow_html=True)
@@ -203,69 +159,210 @@ with tab1:
         st.bar_chart(chart_data_spent)
         st.markdown("</div>", unsafe_allow_html=True)
 
-# --- TAB 2: PREDICCIÓN ---
+# --- TAB 2: PREDICCIÓN CON BACKEND ---
 with tab2:
     st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
-    st.write("### 🎯 Análisis de Riesgo de Abandono")
-    st.write("Utiliza los controles del menú lateral para ingresar los datos del cliente y presiona el botón.")
+    st.write("### 🎯 Análisis de Riesgo de Abandono (Backend Powered)")
     
-    predict_btn = st.button("ANALIZAR RIESGO", use_container_width=True)
+    mode = st.radio("Selecciona el modo de predicción:", ["Predicción Individual", "Predicción por Lote (CSV/Excel)"], horizontal=True)
+    st.markdown("---")
     
-    if predict_btn:
-        with st.spinner("Analizando patrones de comportamiento..."):
-            time.sleep(1.5) # Fake loading for dramatic effect
+    if mode == "Predicción Individual":
+        st.write("#### 👤 Ingrese los datos del cliente:")
+        
+        with st.form("single_predict_form"):
+            c1, c2, c3 = st.columns(3)
             
-            # Prepare input
-            input_df = pd.DataFrame({
-                'Recency': [recency],
-                'Frequency': [frequency],
-                'Total_Spent': [monetary],
-                'Engagement_Score': [engagement],
-                'Rating': [rating],
-                'Age': [age]
-            })
+            with c1:
+                tenure = st.number_input("Tenure (Meses)", min_value=0, value=10)
+                city_tier = st.selectbox("City Tier", [1, 2, 3])
+                warehouse_to_home = st.number_input("Warehouse To Home (km)", min_value=0.0, value=15.0)
+                hour_spend_on_app = st.number_input("Hour Spend On App", min_value=0.0, value=3.0)
+                number_of_device_registered = st.number_input("Devices Registered", min_value=1, step=1, value=4)
+                satisfaction_score = st.slider("Satisfaction Score", 1, 5, 3)
+
+            with c2:
+                number_of_address = st.number_input("Number Of Address", min_value=1, step=1, value=5)
+                complain = st.selectbox("Complain (Quejas)", options=[0, 1], format_func=lambda x: "Sí (1)" if x == 1 else "No (0)")
+                order_amount_hike = st.number_input("Order Amount Hike (%)", min_value=0.0, value=15.0)
+                coupon_used = st.number_input("Coupon Used", min_value=0, step=1, value=2)
+                order_count = st.number_input("Order Count", min_value=0, step=1, value=3)
+                day_since_last_order = st.number_input("Days Since Last Order", min_value=0.0, value=5.0)
+
+            with c3:
+                cashback_amount = st.number_input("Cashback Amount", min_value=0.0, value=180.0)
+                preferred_login_device = st.selectbox("Preferred Login Device", options=[0, 1, 2], format_func=lambda x: ["Computer (0)", "Mobile Phone (1)", "Phone (2)"][x] if x<3 else x)
+                preferred_payment_mode = st.selectbox("Preferred Payment Mode", options=[0, 1, 2, 3, 4, 5, 6], format_func=lambda x: ["CC (0)", "COD (1)", "Cash on Delivery (2)", "Credit Card (3)", "Debit Card (4)", "E Wallet (5)", "UPI (6)"][x] if x<7 else x)
+                gender = st.selectbox("Gender", options=[0, 1], format_func=lambda x: "Female (0)" if x == 0 else "Male (1)")
+                prefered_order_cat = st.selectbox("Preferred Order Cat", options=[0, 1, 2, 3, 4, 5], format_func=lambda x: ["Fashion (0)", "Grocery (1)", "Laptop & Accessory (2)", "Mobile (3)", "Mobile Phone (4)", "Others (5)"][x] if x<6 else x)
+                marital_status = st.selectbox("Marital Status", options=[0, 1, 2], format_func=lambda x: ["Divorced (0)", "Married (1)", "Single (2)"][x] if x<3 else x)
             
-            # Predict
+            submit_btn = st.form_submit_button("PREDECIR INDIVIDUAL", use_container_width=True)
+        
+        if submit_btn:
+            payload = {
+                "tenure": tenure,
+                "city_tier": city_tier,
+                "warehouse_to_home": warehouse_to_home,
+                "hour_spend_on_app": hour_spend_on_app,
+                "number_of_device_registered": number_of_device_registered,
+                "satisfaction_score": satisfaction_score,
+                "number_of_address": number_of_address,
+                "complain": complain,
+                "order_amount_hike_from_last_year": order_amount_hike,
+                "coupon_used": coupon_used,
+                "order_count": order_count,
+                "day_since_last_order": day_since_last_order,
+                "cashback_amount": cashback_amount,
+                "preferred_login_device": preferred_login_device,
+                "preferred_payment_mode": preferred_payment_mode,
+                "gender": gender,
+                "prefered_order_cat": prefered_order_cat,
+                "marital_status": marital_status
+            }
+            
+            with st.spinner("Conectando con el Backend..."):
+                try:
+                    response = requests.post(f"{BACKEND_URL}/predict", json=payload)
+                    response.raise_for_status()
+                    result = response.json()
+                    
+                    # Logica flexible para respuesta del backend
+                     # Probabilidad
+                    if "probability" in result:
+                        prob = result["probability"]
+                    elif "churn_probability" in result:
+                        prob = result["churn_probability"]
+                    else:
+                        # Fallback si no viene la probabilidad
+                        prob = 0.9 if result.get("prediction", 0) == 1 else 0.1
+                        
+                    is_churn = result.get("prediction", 0)
+                    
+                    st.markdown("### 📊 Resultado de la Predicción")
+                    
+                    c_res1, c_res2 = st.columns([1, 2])
+                    with c_res1:
+                        st.metric("Probabilidad de Churn", f"{prob*100:.1f}%")
+                        st.progress(prob)
+                        
+                    with c_res2:
+                        if prob > 0.7:
+                            st.error(f"⚠️ RIESGO ALTO (Churn: {'Sí' if is_churn else 'No'}) - El cliente está en peligro de abandonar.")
+                        elif prob > 0.4:
+                            st.warning(f"⚠️ RIESGO MEDIO (Churn: {'Sí' if is_churn else 'No'}) - Monitorear cliente.")
+                        else:
+                            st.success(f"✅ RIESGO BAJO (Churn: {'Sí' if is_churn else 'No'}) - Cliente seguro.")
+                            
+                except requests.exceptions.ConnectionError:
+                    st.error(f"❌ Error de conexión: No se pudo conectar a {BACKEND_URL}. Asegúrate que el backend esté corriendo.")
+                except Exception as e:
+                    st.error(f"❌ Error al procesar la solicitud: {e}")
+
+    elif mode == "Predicción por Lote (CSV/Excel)":
+        st.write("#### 📂 Carga masiva de clientes")
+        st.info("Sube un archivo con las columnas requeridas (nombres en snake_case como en la API).")
+        
+        uploaded_file = st.file_uploader("Arrastra tu archivo aquí", type=["csv", "xlsx", "json"])
+        
+        if uploaded_file:
             try:
-                prediction = model.predict(input_df)[0]
-                proba = model.predict_proba(input_df)[0][1] # Probability of Class 1 (Churn)
+                # Lectura del archivo
+                if uploaded_file.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded_file)
+                elif uploaded_file.name.endswith('.xlsx'):
+                    df = pd.read_excel(uploaded_file)
+                elif uploaded_file.name.endswith('.json'):
+                    df = pd.read_json(uploaded_file)
+                
+                st.write(f"Previsualización ({len(df)} registros):")
+                st.dataframe(df.head())
+                
+                if st.button("PROCESAR LOTE", use_container_width=True):
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    # Preparar payload
+                    # Asumimos que el CSV ya tiene las columnas con los nombres correctos
+                    # Convertimos a lista de dicts
+                    customers_list = df.to_dict(orient="records")
+                    payload = {"customers": customers_list}
+                    
+                    status_text.text("Enviando datos al backend...")
+                    progress_bar.progress(30)
+                    
+                    try:
+                        response = requests.post(f"{BACKEND_URL}/predict-batch", json=payload)
+                        response.raise_for_status()
+                        progress_bar.progress(80)
+                        
+                        api_response = response.json()
+                        # Se espera algo como: {"predictions": [0, 1, 0, ...]} o una lista directa
+                        
+                        if isinstance(api_response, dict) and "predictions" in api_response:
+                            predictions = api_response["predictions"]
+                        elif isinstance(api_response, list):
+                            predictions = api_response
+                        else:
+                             predictions = []
+                             st.error("Formato de respuesta desconocido")
+
+                        if len(predictions) == len(df):
+                            # Manejar si predictions es lista de objetos o lista de ints
+                            if len(predictions) > 0 and isinstance(predictions[0], dict):
+                                # Logic to find the probability key dynamically
+                                sample_pred = predictions[0]
+                                prob_key = "probability"
+                                if "churn_probability" in sample_pred:
+                                    prob_key = "churn_probability"
+                                elif "prob" in sample_pred:
+                                    prob_key = "prob"
+                                
+                                df['Churn_Prediction'] = [p.get('prediction', p.get('churn', 0)) for p in predictions]
+                                df['Churn_Probability'] = [p.get(prob_key, 0.0) for p in predictions]
+                            else:
+                                df['Churn_Prediction'] = predictions
+                                # Dummy prob si no viene
+                                df['Churn_Probability'] = df['Churn_Prediction'].apply(lambda x: 0.9 if x==1 else 0.1)
+                            
+                            progress_bar.progress(100)
+                            status_text.text("¡Completado!")
+                            
+                            st.success("✅ Predicciones recibidas exitosamente.")
+                            
+                            # Función para colorear
+                            def color_risk(val):
+                                if val > 0.7:
+                                    return 'background-color: rgba(255, 0, 0, 0.5); color: white'
+                                elif val > 0.4:
+                                    return 'background-color: rgba(255, 165, 0, 0.5); color: white'
+                                else:
+                                    return 'background-color: rgba(0, 255, 0, 0.3); color: white'
+
+                            # Formatear y mostrar
+                            st.dataframe(
+                                df.style.map(color_risk, subset=['Churn_Probability'])
+                                .format({'Churn_Probability': '{:.1%}'}),
+                                use_container_width=True
+                            )
+                            
+                            # Botón de descarga
+                            csv_data = df.to_csv(index=False).encode('utf-8')
+                            st.download_button(
+                                label="Download Predictions as CSV",
+                                data=csv_data,
+                                file_name='churn_predictions.csv',
+                                mime='text/csv',
+                            )
+                        else:
+                            st.warning("⚠️ La cantidad de predicciones no coincide con los registros enviados.")
+                            
+                    except Exception as e:
+                        st.error(f"Error en la petición: {e}")
+                        
             except Exception as e:
-                st.error(f"Error en la predicción: {e}")
-                prediction = 0
-                proba = 0.5
-            
-            # Display Results
-            st.markdown("---")
-            col_res1, col_res2 = st.columns([1, 2])
-            
-            with col_res1:
-                # Gauge Chart (Simulated with progress bar and metrics)
-                st.metric("Probabilidad de Churn", f"{proba*100:.1f}%")
-                st.progress(proba)
-            
-            with col_res2:
-                if proba > 0.7:
-                    st.markdown("""
-                        <div style='padding: 20px; border-radius: 10px; background-color: rgba(255, 0, 0, 0.2); border: 2px solid #FF0000; text-align: center;'>
-                            <h2 style='color: #FF4444; margin:0;'>⚠️ ALERTA: ALTO RIESGO</h2>
-                            <p style='color: white;'>Se recomienda intervenir con descuentos o campaña de fidelización.</p>
-                        </div>
-                    """, unsafe_allow_html=True)
-                elif proba > 0.4:
-                     st.markdown("""
-                        <div style='padding: 20px; border-radius: 10px; background-color: rgba(255, 165, 0, 0.2); border: 2px solid #FFA500; text-align: center;'>
-                            <h2 style='color: #FFA500; margin:0;'>⚠️ RIESGO MODERADO</h2>
-                            <p style='color: white;'>Monitorear actividad del usuario.</p>
-                        </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.markdown("""
-                        <div style='padding: 20px; border-radius: 10px; background-color: rgba(0, 255, 0, 0.2); border: 2px solid #00FF00; text-align: center;'>
-                            <h2 style='color: #00FF00; margin:0;'>✅ CLIENTE LEAL</h2>
-                            <p style='color: white;'>Bajo riesgo de abandono.</p>
-                        </div>
-                    """, unsafe_allow_html=True)
-    
+                st.error(f"Error leyendo el archivo: {e}")
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 # Footer
@@ -274,8 +371,3 @@ st.markdown("""
         <p>E-comChurnnalisys © 2026 | Powered by AI & Streamlit</p>
     </div>
 """, unsafe_allow_html=True)
-
-if __name__ == "__main__":
-    print("\n\n\033[93m⚠️  WARNING: This file is a Streamlit app and cannot be run directly with 'python'.\033[0m")
-    print("\033[92m👉 Please run this command instead:\033[0m")
-    print("\n    \033[1mpython3 -m streamlit run app.py\033[0m\n")
